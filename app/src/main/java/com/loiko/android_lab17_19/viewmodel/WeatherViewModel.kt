@@ -4,9 +4,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.loiko.android_lab17_19.data.WeatherData
 import com.loiko.android_lab17_19.data.WeatherRepository
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 
 class WeatherViewModel : ViewModel() {
@@ -17,6 +21,7 @@ class WeatherViewModel : ViewModel() {
 
     init {
         loadWeatherData()
+        startAutoRefresh()
     }
 
     fun loadWeatherData() {
@@ -26,22 +31,55 @@ class WeatherViewModel : ViewModel() {
                 error = null
             )
             try {
-                val temperature = repository.fetchTemperature()
-                _weatherState.value = _weatherState.value.copy(temperature = temperature)
+                coroutineScope {
+                    _weatherState.value = _weatherState.value.copy(
+                        loadingProgress = "Загружается температура..."
+                    )
+                    val tempDeferred = async { repository.fetchTemperature() }
+                    val humDeferred = async { repository.fetchHumidity() }
+                    val windDeferred = async { repository.fetchWindSpeed() }
+                    val temperature = tempDeferred.await()
+                    val humidity = humDeferred.await()
+                    val windSpeed = windDeferred.await()
 
-                val humidity = repository.fetchHumidity()
-                _weatherState.value = _weatherState.value.copy(humidity = humidity)
+                    _weatherState.value = _weatherState.value.copy(
+                        loadingProgress = "Вычисляется индекс погоды..."
+                    )
+                    val weatherIndex = repository.calculateWeatherIndex()
 
-                val windSpeed = repository.fetchWindSpeed()
-                _weatherState.value = _weatherState.value.copy(
-                    windSpeed = windSpeed,
-                    isLoading = false
-                )
+                    _weatherState.value = WeatherData(
+                        temperature = temperature,
+                        humidity = humidity,
+                        windSpeed = windSpeed,
+                        isLoading = false,
+                        error = null,
+                        loadingProgress = "Загрузка завершена!",
+                        weatherIndex = weatherIndex
+                    )
+                }
             } catch (e: Exception) {
                 _weatherState.value = _weatherState.value.copy(
                     isLoading = false,
-                    error = "Ошибка загрузки: ${e.message}"
+                    error = "Ошибка загрузки: ${e.message}",
+                    loadingProgress = ""
                 )
+            }
+        }
+    }
+
+    fun toggleErrorSimulation() {
+        repository.toggleErrorSimulation()
+    }
+
+    private fun startAutoRefresh() {
+        viewModelScope.launch {
+            flow {
+                while (true) {
+                    delay(10000)
+                    emit(Unit)
+                }
+            }.collect {
+                loadWeatherData()
             }
         }
     }
